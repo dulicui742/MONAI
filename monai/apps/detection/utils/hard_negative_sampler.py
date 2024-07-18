@@ -79,16 +79,20 @@ class HardNegativeSamplerBase:
             raise ValueError("The number of negative samples should not be larger than the number of all samples.")
 
         # sample pool size is ``num_neg * self.pool_size``
-        pool = int(num_neg * self.pool_size)
-        pool = min(negative.numel(), pool)  # protect against not enough negatives
+        pool = int(num_neg * self.pool_size) ## 16 * 20
+        pool = min(negative.numel(), pool)  # protect against not enough negatives 320
 
         # create a sample pool of highest scoring negative samples
-        _, negative_idx_pool = fg_probs[negative].to(torch.float32).topk(pool, dim=0, sorted=True)
+        _, negative_idx_pool = fg_probs[negative].to(torch.float32).topk(pool, dim=0, sorted=True) ##torch.Size([320])
         hard_negative = negative[negative_idx_pool]
 
         # select negatives from pool
         perm2 = torch.randperm(hard_negative.numel(), device=hard_negative.device)[:num_neg]
+        ## tensor([ 36, 124, 283,  90, 155,  28, 245, 211, 275, 195, 196, 128, 217, 312, 180, 139], device='cuda:0')
         selected_neg_idx = hard_negative[perm2]
+        ## metatensor([251530, 115714, 245785, 257299, 263773, 216985, 121342, 251887, 234391,
+        #     229120, 252139, 109576, 241093, 257062, 234736, 306439],
+        #    device='cuda:0')
 
         # output a binary mask with same size of fg_probs that indicates selected negative samples.
         neg_mask = torch.zeros_like(fg_probs, dtype=torch.uint8)
@@ -154,8 +158,11 @@ class HardNegativeSampler(HardNegativeSamplerBase):
                 concat_fg_probs = torch.rand(6)
                 pos_idx_list, neg_idx_list = sampler(target_labels, concat_fg_probs)
         """
-        samples_per_image = [samples_in_image.shape[0] for samples_in_image in target_labels]
+        ## target_labels = [tensor([0, 0, 0,  ..., 0, 0, 0], device='cuda:0')]
+        ## concat_fg_probs = target_labels[0] = torch.Size([315360])
+        samples_per_image = [samples_in_image.shape[0] for samples_in_image in target_labels] ## [315360]
         fg_probs = concat_fg_probs.split(samples_per_image, 0)
+        ## (tensor([-4.6719, -4.3516, -4.6367,  ..., -4.5391, -4.3789, -4.5000], device='cuda:0', grad_fn=<SplitWithSizesBackward0>),)  fg_probs[0].shape=torch.Size([315360])
         return self.select_samples_img_list(target_labels, fg_probs)
 
     def select_samples_img_list(
@@ -201,7 +208,7 @@ class HardNegativeSampler(HardNegativeSamplerBase):
             pos_idx_per_image_mask, neg_idx_per_image_mask = self.select_samples_per_img(
                 labels_per_img, fg_probs_per_img
             )
-            pos_idx.append(pos_idx_per_image_mask)
+            pos_idx.append(pos_idx_per_image_mask)  ## pos_idx_per_image_mask=torch.Size([315360])
             neg_idx.append(neg_idx_per_image_mask)
 
         return pos_idx, neg_idx
@@ -234,8 +241,8 @@ class HardNegativeSampler(HardNegativeSamplerBase):
         if labels_per_img.numel() != fg_probs_per_img.numel():
             raise ValueError("labels_per_img and fg_probs_per_img should have same number of elements.")
 
-        positive = torch.where(labels_per_img >= 1)[0]
-        negative = torch.where(labels_per_img == 0)[0]
+        positive = torch.where(labels_per_img >= 1)[0] ##tensor([], device='cuda:0', dtype=torch.int64)/metatensor([293897, 293954, 293957, 293960], device='cuda:0')
+        negative = torch.where(labels_per_img == 0)[0] ## tensor([     0,      1,      2,  ..., 315357, 315358, 315359], device='cuda:0')
 
         num_pos = self.get_num_pos(positive)
         pos_idx_per_image_mask = self.select_positives(positive, num_pos, labels_per_img)
@@ -256,9 +263,9 @@ class HardNegativeSampler(HardNegativeSamplerBase):
             number of positive sample
         """
         # positive sample sampling
-        num_pos = int(self.batch_size_per_image * self.positive_fraction)
+        num_pos = int(self.batch_size_per_image * self.positive_fraction) ## 64 * 0.3 = 19
         # protect against not enough positive examples
-        num_pos = min(positive.numel(), num_pos)
+        num_pos = min(positive.numel(), num_pos) ## 0/4
         return num_pos
 
     def get_num_neg(self, negative: torch.Tensor, num_pos: int) -> int:
@@ -273,9 +280,9 @@ class HardNegativeSampler(HardNegativeSamplerBase):
             number of negative samples
         """
         # always assume at least one pos sample was sampled
-        num_neg = int(max(1, num_pos) * abs(1 - 1.0 / float(self.positive_fraction)))
+        num_neg = int(max(1, num_pos) * abs(1 - 1.0 / float(self.positive_fraction)))  ## 2(当num_pos=0时)/9
         # protect against not enough negative examples and sample at least self.min_neg if possible
-        num_neg = min(negative.numel(), max(num_neg, self.min_neg))
+        num_neg = min(negative.numel(), max(num_neg, self.min_neg)) ## 16 / 16
         return num_neg
 
     def select_positives(self, positive: Tensor, num_pos: int, labels: Tensor) -> Tensor:
@@ -296,10 +303,10 @@ class HardNegativeSampler(HardNegativeSamplerBase):
         if positive.numel() > labels.numel():
             raise ValueError("The number of positive samples should not be larger than the number of all samples.")
 
-        perm1 = torch.randperm(positive.numel(), device=positive.device)[:num_pos]
-        pos_idx_per_image = positive[perm1]
+        perm1 = torch.randperm(positive.numel(), device=positive.device)[:num_pos] ## tensor([], device='cuda:0', dtype=torch.int64)/tensor([2, 1, 3, 0], device='cuda:0')
+        pos_idx_per_image = positive[perm1] ## tensor([], device='cuda:0', dtype=torch.int64)/metatensor([293957, 293954, 293960, 293897], device='cuda:0')
 
         # output a binary mask with same size of labels that indicates selected positive samples.
-        pos_idx_per_image_mask = torch.zeros_like(labels, dtype=torch.uint8)
+        pos_idx_per_image_mask = torch.zeros_like(labels, dtype=torch.uint8) ## torch.Size([315360])
         pos_idx_per_image_mask[pos_idx_per_image] = 1
         return pos_idx_per_image_mask

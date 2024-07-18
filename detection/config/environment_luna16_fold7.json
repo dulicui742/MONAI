@@ -1,0 +1,7 @@
+{
+    "model_path": "/mnt/Data02/project/experiment/monai/trained_models/model_luna16_fold7.pt",
+    "data_base_dir": "/mnt/Data02/project/experiment/monai/datasets",
+    "data_list_file_path": "/mnt/Data02/project/experiment/monai/LUNA16_datasplit/dataset_fold7.json",
+    "tfevent_path": "/mnt/Data02/project/experiment/monai/tfevent_train/luna16_fold7",
+    "result_list_file_path": "/mnt/Data02/project/experiment/monai/result/result_luna16_fold7.json"
+}

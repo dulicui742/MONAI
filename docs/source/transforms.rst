@@ -667,12 +667,6 @@ Post-processing
     :members:
     :special-members: __call__
 
-`Invert`
-"""""""""
-.. autoclass:: Invert
-    :members:
-    :special-members: __call__
-
 Regularization
 ^^^^^^^^^^^^^^
 

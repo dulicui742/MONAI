@@ -135,6 +135,7 @@ def sliding_window_inference(
         - input must be channel-first and have a batch dim, supports N-D sliding window.
 
     """
+    # import pdb; pdb.set_trace()
     buffered = buffer_steps is not None and buffer_steps > 0
     num_spatial_dims = len(inputs.shape) - 2
     if buffered:

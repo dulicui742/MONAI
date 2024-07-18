@@ -76,26 +76,66 @@ def encode_boxes(gt_boxes: Tensor, proposals: Tensor, weights: Tensor) -> Tensor
 
     if gt_boxes.shape[0] != proposals.shape[0]:
         raise ValueError("gt_boxes.shape[0] should be equal to proposals.shape[0].")
-    spatial_dims = look_up_option(len(weights), [4, 6]) // 2
+    spatial_dims = look_up_option(len(weights), [4, 6]) // 2   ## 3
 
     if not is_valid_box_values(gt_boxes):
         raise ValueError("gt_boxes is not valid. Please check if it contains empty boxes.")
     if not is_valid_box_values(proposals):
         raise ValueError("proposals is not valid. Please check if it contains empty boxes.")
 
+    import pdb; pdb.set_trace()
     # implementation starts here
     ex_cccwhd: Tensor = convert_box_mode(proposals, src_mode=StandardMode, dst_mode=CenterSizeMode)  # type: ignore
     gt_cccwhd: Tensor = convert_box_mode(gt_boxes, src_mode=StandardMode, dst_mode=CenterSizeMode)  # type: ignore
+    ## proposal
+    # metatensor([[ 86.,   6.,  14., 106.,  26.,  26.],
+    #     [ 86.,  14.,  10., 106.,  34.,  22.],
+    #     [ 86.,  14.,  14., 106.,  34.,  26.],
+    #     [ 86.,  14.,  18., 106.,  34.,  30.]], device='cuda:0',
+    #    dtype=torch.float16)
+    ## ex_cccwhd
+    # metatensor([[96., 16., 20., 20., 20., 12.],
+    #     [96., 24., 16., 20., 20., 12.],
+    #     [96., 24., 20., 20., 20., 12.],
+    #     [96., 24., 24., 20., 20., 12.]], device='cuda:0', dtype=torch.float16)
+
+    ## gt_boxes
+    # metatensor([[ 85.,  11.,  14., 107.,  33.,  26.],
+    #     [ 85.,  11.,  14., 107.,  33.,  26.],
+    #     [ 85.,  11.,  14., 107.,  33.,  26.],
+    #     [ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0',
+    #    dtype=torch.float16)
+    # gt_cccwhd
+    # metatensor([[96., 22., 20., 22., 22., 12.],
+    #     [96., 22., 20., 22., 22., 12.],
+    #     [96., 22., 20., 22., 22., 12.],
+    #     [96., 22., 20., 22., 22., 12.]], device='cuda:0', dtype=torch.float16)
+
     targets_dxyz = (
         weights[:spatial_dims].unsqueeze(0)
         * (gt_cccwhd[:, :spatial_dims] - ex_cccwhd[:, :spatial_dims])
         / ex_cccwhd[:, spatial_dims:]
     )
+    # metatensor([[ 0.0000,  0.3000,  0.0000],
+    #     [ 0.0000, -0.1000,  0.3333],
+    #     [ 0.0000, -0.1000,  0.0000],
+    #     [ 0.0000, -0.1000, -0.3333]], device='cuda:0', dtype=torch.float16)
+    
     targets_dwhd = weights[spatial_dims:].unsqueeze(0) * torch.log(
         gt_cccwhd[:, spatial_dims:] / ex_cccwhd[:, spatial_dims:]
     )
+    # metatensor([[0.0950, 0.0950, 0.0000],
+    #     [0.0950, 0.0950, 0.0000],
+    #     [0.0950, 0.0950, 0.0000],
+    #     [0.0950, 0.0950, 0.0000]], device='cuda:0')
 
     targets = torch.cat((targets_dxyz, targets_dwhd), dim=1)
+    # metatensor([[ 0.0000,  0.3000,  0.0000,  0.0950,  0.0950,  0.0000],
+    #     [ 0.0000, -0.1000,  0.3333,  0.0950,  0.0950,  0.0000],
+    #     [ 0.0000, -0.1000,  0.0000,  0.0950,  0.0950,  0.0000],
+    #     [ 0.0000, -0.1000, -0.3333,  0.0950,  0.0950,  0.0000]],
+    #    device='cuda:0')
+
     # torch.log may cause NaN or Inf
     if torch.isnan(targets).any() or torch.isinf(targets).any():
         raise ValueError("targets is NaN or Inf.")

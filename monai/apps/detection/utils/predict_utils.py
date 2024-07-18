@@ -72,6 +72,7 @@ def _network_sequence_output(images: Tensor, network: nn.Module, keys: list[str]
     Return:
         network output values concat to a single List[Tensor]
     """
+    import pdb; pdb.set_trace()
     head_outputs = network(images)
 
     # if head_outputs is already a sequence of tensors, directly output it

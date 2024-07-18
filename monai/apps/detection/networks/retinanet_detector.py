@@ -205,14 +205,14 @@ class RetinaNetDetector(nn.Module):
         self.size_divisible = self.get_attribute_from_network("size_divisible", default_value=size_divisible)
         self.size_divisible = ensure_tuple_rep(self.size_divisible, self.spatial_dims)
         # keys for the network output
-        self.cls_key = self.get_attribute_from_network("cls_key", default_value=cls_key)
-        self.box_reg_key = self.get_attribute_from_network("box_reg_key", default_value=box_reg_key)
+        self.cls_key = self.get_attribute_from_network("cls_key", default_value=cls_key) ## "classification"
+        self.box_reg_key = self.get_attribute_from_network("box_reg_key", default_value=box_reg_key) ## "box_regression"
 
         # check if anchor_generator matches with network
         self.anchor_generator = anchor_generator
-        self.num_anchors_per_loc = self.anchor_generator.num_anchors_per_location()[0]
-        network_num_anchors = self.get_attribute_from_network("num_anchors", default_value=self.num_anchors_per_loc)
-        if self.num_anchors_per_loc != network_num_anchors:
+        self.num_anchors_per_loc = self.anchor_generator.num_anchors_per_location()[0] # 3
+        network_num_anchors = self.get_attribute_from_network("num_anchors", default_value=self.num_anchors_per_loc) ## 3
+        if self.num_anchors_per_loc != network_num_anchors:  ## network_num_anchors 是传入RetinaNet的参数，计算方式和self.num_anchors_per_loc一样
             raise ValueError(
                 f"Number of feature map channels ({network_num_anchors}) "
                 f"should match with number of anchors at each location ({self.num_anchors_per_loc})."
@@ -495,19 +495,35 @@ class RetinaNetDetector(nn.Module):
 
         """
         # 1. Check if input arguments are valid
+        import pdb; pdb.set_trace()
         if self.training:
             targets = check_training_targets(
-                input_images, targets, self.spatial_dims, self.target_label_key, self.target_box_key
+                input_images, targets, self.spatial_dims, self.target_label_key, self.target_box_key  ## 'label', 'box'
             )
             self._check_detector_training_components()
 
         # 2. Pad list of images to a single Tensor `images` with spatial size divisible by self.size_divisible.
         # image_sizes stores the original spatial_size of each image before padding.
-        images, image_sizes = preprocess_images(input_images, self.spatial_dims, self.size_divisible)
 
+        ##testing: input_images[0].shape=torch.Size([1, 427, 427, 236]), self.spatial_dims=3, self.size_divisible=(16,16,8)
+        images, image_sizes = preprocess_images(input_images, self.spatial_dims, self.size_divisible)
+        ##training images.shape = torch.Size([4, 1, 192, 192, 80]) image_size=[[192, 192, 80], [192, 192, 80], [192, 192, 80], [192, 192, 80]]
+        ##testing image.shape=torch.Size([1, 1, 432, 432, 240]), image_sizes=[[427, 427, 236]]
         # 3. Generate network outputs. Use inferer only in evaluation mode.
         if self.training or (not use_inferer):
-            head_outputs = self.network(images)
+            head_outputs = self.network(images) ## head_outputs['classification'], head_outputs['box_regression']
+            ## head_outputs['classification'][0].shape = torch.Size([4, 3, 48, 48, 40])  4x  B * (A*num_cls) * W * H * D
+            ## head_outputs['classification'][1].shape = torch.Size([4, 3, 24, 24, 20])  8x
+            ## head_outputs['classification'][2].shape = torch.Size([4, 3, 12, 12, 10])  16x
+
+            ##testing
+            # (Pdb) head_outputs['classification'][0].shape     head_outputs['box_regression'][0].shape
+            # torch.Size([1, 3, 108, 108, 120])                 torch.Size([1, 18, 108, 108, 120])
+            # (Pdb) head_outputs['classification'][1].shape
+            # torch.Size([1, 3, 54, 54, 60])
+            # (Pdb) head_outputs['classification'][2].shape
+            # torch.Size([1, 3, 27, 27, 30])
+
             if isinstance(head_outputs, (tuple, list)):
                 tmp_dict = {}
                 tmp_dict[self.cls_key] = head_outputs[: len(head_outputs) // 2]
@@ -521,14 +537,28 @@ class RetinaNetDetector(nn.Module):
                 raise ValueError(
                     "`self.inferer` is not defined." "Please refer to function self.set_sliding_window_inferer(*)."
                 )
+            import pdb; pdb.set_trace()
             head_outputs = predict_with_inferer(
                 images, self.network, keys=[self.cls_key, self.box_reg_key], inferer=self.inferer
             )
 
+        import pdb; pdb.set_trace()
         # 4. Generate anchors and store it in self.anchors: List[Tensor]
         self.generate_anchors(images, head_outputs)
+        ## self.anchors = [tensor([[ -3.,  -4.,  -2.,   3.,   4.,   2.],
+    #     [ -4.,  -3.,  -2.,   4.,   3.,   2.],
+    #     [ -5.,  -5.,  -3.,   5.,   5.,   3.],
+    #     ...,
+    #     [404., 400., 224., 428., 432., 240.],
+    #     [400., 404., 222., 432., 428., 242.],
+    #     [396., 396., 220., 436., 436., 244.]], device='cuda:0',
+    #    dtype=torch.float16)]   len()=1, anchors[0].shape=torch.Size([4789530, 6])  for test
+
+        import pdb; pdb.set_trace()
         # num_anchor_locs_per_level: List[int], list of HW or HWD for each level
-        num_anchor_locs_per_level = [x.shape[2:].numel() for x in head_outputs[self.cls_key]]
+        num_anchor_locs_per_level = [x.shape[2:].numel() for x in head_outputs[self.cls_key]]  
+        ## x.shape=?   num_anchor_locs_per_level = [92160, 11520, 1440]/3个level的HWD
+        ## for test: [1399680, 174960, 21870]
 
         # 5. Reshape and concatenate head_outputs values from List[Tensor] to Tensor
         # head_outputs, originally being Dict[str, List[Tensor]], will be reshaped to Dict[str, Tensor]
@@ -536,12 +566,31 @@ class RetinaNetDetector(nn.Module):
             # reshape to Tensor sized(B, sum(HWA), self.num_classes) for self.cls_key
             # or (B, sum(HWA), 2* self.spatial_dims) for self.box_reg_key
             # A = self.num_anchors_per_loc
-            head_outputs[key] = self._reshape_maps(head_outputs[key])
+            head_outputs[key] = self._reshape_maps(head_outputs[key])   ## B, A*cls, HWD, -->B, HWDA, cls 
+            ## cls_key
+            ## torch.Size([4, 3, 48, 48, 40])-->torch.Size([315360, 1])  torch.Size([1, 3, 108, 108, 120])-->torch.Size([4789530, 1])
+            ## torch.Size([4, 3, 24, 24, 20])-->torch.Size([315360, 1])
+            ## torch.Size([4, 3, 12, 12, 10])-->torch.Size([315360, 1])
+
+            ## box_reg_key
+            ## torch.Size([4, 18, 48, 48, 40])-->torch.Size([315360, 6]) torch.Size([1, 3, 108, 108, 120])-->torch.Size([4789530, 6])
+            ## torch.Size([4, 18, 24, 24, 20])-->torch.Size([315360, 6])
+            ## torch.Size([4, 18, 12, 12, 10])-->torch.Size([315360, 6])
 
         # 6(1). If during training, return losses
         if self.training:
             losses = self.compute_loss(head_outputs, targets, self.anchors, num_anchor_locs_per_level)  # type: ignore
             return losses
+        ## len(targets) = 4  num_anchor_locs_per_level =[92160, 11520, 1440]
+        # (Pdb) targets[0]
+        # {'label': metatensor([], device='cuda:0', dtype=torch.int64), 'box': metatensor([], device='cuda:0', size=(0, 6), dtype=torch.float16)}
+        # (Pdb) targets[1]
+        # {'label': metatensor([], device='cuda:0', dtype=torch.int64), 'box': metatensor([], device='cuda:0', size=(0, 6), dtype=torch.float16)}
+        # (Pdb) targets[2]
+        # {'label': metatensor([0], device='cuda:0'), 'box': metatensor([[ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0',
+        #     dtype=torch.float16)}
+        # (Pdb) targets[3]
+        # {'label': metatensor([], device='cuda:0', dtype=torch.int64), 'box': metatensor([], device='cuda:0', size=(0, 6), dtype=torch.float16)}
 
         # 6(2). If during inference, return detection results
         detections = self.postprocess_detections(
@@ -577,9 +626,10 @@ class RetinaNetDetector(nn.Module):
               sized (B, sum(HW(D)A), self.num_classes). ``head_output_reshape[self.box_reg_key]`` is a Tensor
               sized (B, sum(HW(D)A), 2*self.spatial_dims)
         """
+        # import pdb; pdb.set_trace()
         if (self.anchors is None) or (self.previous_image_shape != images.shape):
-            self.anchors = self.anchor_generator(images, head_outputs[self.cls_key])  # List[Tensor], len = batchsize
-            self.previous_image_shape = images.shape
+            self.anchors = self.anchor_generator(images, head_outputs[self.cls_key])  # List[torch.Size([315360, 6]),...], len = batchsize
+            self.previous_image_shape = images.shape  ##torch.Size([4, 1, 192, 192, 80])  /  torch.Size([1, 1, 432, 432, 240])
 
     def _reshape_maps(self, result_maps: list[Tensor]) -> Tensor:
         """
@@ -651,20 +701,22 @@ class RetinaNetDetector(nn.Module):
         Return:
             a list of dict, each dict corresponds to detection result on image.
         """
-
+        import pdb; pdb.set_trace()
         # recover level sizes, HWA or HWDA for each level
         num_anchors_per_level = [
             num_anchor_locs * self.num_anchors_per_loc for num_anchor_locs in num_anchor_locs_per_level
-        ]
+        ] ## [4199040, 524880, 65610]  num_anchor_locs_per_level = [1399680, 174960, 21870] self.num_anchors_per_loc=3
 
         # split outputs per level
         split_head_outputs: dict[str, list[Tensor]] = {}
-        for k in head_outputs_reshape:
-            split_head_outputs[k] = list(head_outputs_reshape[k].split(num_anchors_per_level, dim=1))
-        split_anchors = [list(a.split(num_anchors_per_level)) for a in anchors]  # List[List[Tensor]]
+        for k in head_outputs_reshape: ## head_outputs_reshape[k][0].shape=torch.Size([4789530, 6]) 
+            split_head_outputs[k] = list(head_outputs_reshape[k].split(num_anchors_per_level, dim=1)) 
+            ##len(split_head_outputs[k])=3, split_head_outputs[k][0].shape=torch.Size([1, 4199040, 6]) split_head_outputs[k][1].shape=torch.Size([1, 524880, 6]),..
+        split_anchors = [list(a.split(num_anchors_per_level)) for a in anchors]  
+        # List[List[Tensor]]  len(split_anchors[0])=3  split_anchors[0][0].shape=torch.Size([4199040, 6]),....
 
-        class_logits = split_head_outputs[self.cls_key]  # List[Tensor], each sized (B, HWA, self.num_classes)
-        box_regression = split_head_outputs[self.box_reg_key]  # List[Tensor], each sized (B, HWA, 2*spatial_dims)
+        class_logits = split_head_outputs[self.cls_key]  # List[Tensor], each sized (B, HWA, self.num_classes) class_logits[0].shape=torch.Size([1, 4199040, 1])
+        box_regression = split_head_outputs[self.box_reg_key]  # List[Tensor], each sized (B, HWA, 2*spatial_dims) box_regression[0].shape=torch.Size([1, 4199040, 6])
         compute_dtype = class_logits[0].dtype
 
         num_images = len(image_sizes)  # B
@@ -674,15 +726,17 @@ class RetinaNetDetector(nn.Module):
         for index in range(num_images):
             box_regression_per_image = [
                 br[index] for br in box_regression
-            ]  # List[Tensor], each sized (HWA, 2*spatial_dims)
-            logits_per_image = [cl[index] for cl in class_logits]  # List[Tensor], each sized (HWA, self.num_classes)
+            ]  # List[Tensor], each sized (HWA, 2*spatial_dims) box_regression_per_image[0].shape=torch.Size([4199040, 6])
+            logits_per_image = [cl[index] for cl in class_logits]  # List[Tensor], each sized (HWA, self.num_classes) torch.Size([4199040, 1])
             anchors_per_image, img_spatial_size = split_anchors[index], image_sizes[index]
+            ## anchors_per_image[0].shape=torch.Size([4199040, 6]), image_spatial_size[0]=427
             # decode box regression into boxes
             boxes_per_image = [
                 self.box_coder.decode_single(b.to(torch.float32), a).to(compute_dtype)
                 for b, a in zip(box_regression_per_image, anchors_per_image)
             ]  # List[Tensor], each sized (HWA, 2*spatial_dims)
 
+            import pdb; pdb.set_trace()
             selected_boxes, selected_scores, selected_labels = self.box_selector.select_boxes_per_image(
                 boxes_per_image, logits_per_image, img_spatial_size
             )
@@ -720,6 +774,8 @@ class RetinaNetDetector(nn.Module):
         Return:
             a dict of several kinds of losses.
         """
+        ## head_outputs_reshape[self.cls_key] = torch.Size([4, 315360, 1])
+        ## head_outputs_reshape[self.box_reg_key] = torch.Size([4, 315360, 6])
         matched_idxs = self.compute_anchor_matched_idxs(anchors, targets, num_anchor_locs_per_level)
         losses_cls = self.compute_cls_loss(head_outputs_reshape[self.cls_key], targets, matched_idxs)
         losses_box_regression = self.compute_box_loss(
@@ -752,14 +808,20 @@ class RetinaNetDetector(nn.Module):
             or a negative value indicating that anchor i could not be matched.
             BELOW_LOW_THRESHOLD = -1, BETWEEN_THRESHOLDS = -2
         """
+
+        ## len(anchors) = 4, anchors[i].shape = torch.Size([315360, 6])
         matched_idxs = []
         for anchors_per_image, targets_per_image in zip(anchors, targets):
             # anchors_per_image: Tensor, targets_per_image: Dice[str, Tensor]
+            # (Pdb) anchors_per_image.shape
+            # torch.Size([315360, 6])
+            # (Pdb) targets_per_image
+            # {'label': metatensor([], device='cuda:0', dtype=torch.int64), 'box': metatensor([], device='cuda:0', size=(0, 6), dtype=torch.float16)}
             if targets_per_image[self.target_box_key].numel() == 0:
                 # if no GT boxes
                 matched_idxs.append(
                     torch.full((anchors_per_image.size(0),), -1, dtype=torch.int64, device=anchors_per_image.device)
-                )
+                ) ## shape= torch.Size([315360])
                 continue
 
             # matched_idxs_per_image (Tensor[int64]): Tensor sized (sum(HWA),) or (sum(HWDA),)
@@ -775,10 +837,10 @@ class RetinaNetDetector(nn.Module):
             elif isinstance(self.proposal_matcher, ATSSMatcher):
                 # if monai ATSS matcher
                 match_quality_matrix, matched_idxs_per_image = self.proposal_matcher(
-                    targets_per_image[self.target_box_key].to(anchors_per_image.device),
+                    targets_per_image[self.target_box_key].to(anchors_per_image.device),  ## metatensor([[ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0',type=torch.float16)
                     anchors_per_image,
-                    num_anchor_locs_per_level,
-                    self.num_anchors_per_loc,
+                    num_anchor_locs_per_level, ## [92160, 11520, 1440]
+                    self.num_anchors_per_loc, ## 3
                 )
             else:
                 raise NotImplementedError(
@@ -818,15 +880,23 @@ class RetinaNetDetector(nn.Module):
         total_gt_classes_target_list = []
         for targets_per_image, cls_logits_per_image, matched_idxs_per_image in zip(targets, cls_logits, matched_idxs):
             # for each image, get training samples
-            sampled_cls_logits_per_image, sampled_gt_classes_target = self.get_cls_train_sample_per_image(
-                cls_logits_per_image, targets_per_image, matched_idxs_per_image
-            )
-            total_cls_logits_list.append(sampled_cls_logits_per_image)
-            total_gt_classes_target_list.append(sampled_gt_classes_target)
+            ## 一组
+            ## {'label': metatensor([], device='cuda:0', dtype=torch.int64), 'box': metatensor([], device='cuda:0', size=(0, 6), dtype=torch.float16)}
+            ## cls_logits_per_image=torch.Size([315360, 1]), torch.Size([315360])
 
-        total_cls_logits = torch.cat(total_cls_logits_list, dim=0)
-        total_gt_classes_target = torch.cat(total_gt_classes_target_list, dim=0)
+            ## 二组
+            ## {'label': metatensor([0], device='cuda:0'), 'box': metatensor([[ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0',dtype=torch.float16)}
+            sampled_cls_logits_per_image, sampled_gt_classes_target = self.get_cls_train_sample_per_image(
+                cls_logits_per_image, targets_per_image, matched_idxs_per_image=matched_idxs_per_image
+            )
+            total_cls_logits_list.append(sampled_cls_logits_per_image)  ## torch.Size([20, 1])  4 positive + 16 negative
+            total_gt_classes_target_list.append(sampled_gt_classes_target)
+        ## 一个batch 4个样本，只有第三个含有gt，其他3个样本采样了16个负样本，第三个采样了4个正样本 + 16个负样本，整个batch采样了64个负样本 + 4个正样本
+
+        total_cls_logits = torch.cat(total_cls_logits_list, dim=0)  ## torch.Size([68, 1])
+        total_gt_classes_target = torch.cat(total_gt_classes_target_list, dim=0) ## torch.Size([68, 1])
         losses: Tensor = self.cls_loss_func(total_cls_logits, total_gt_classes_target).to(total_cls_logits.dtype)
+        ## metatensor(0.4529, device='cuda:0', dtype=torch.float16, grad_fn=<AliasBackward0>)
         return losses
 
     def compute_box_loss(
@@ -857,12 +927,26 @@ class RetinaNetDetector(nn.Module):
         for targets_per_image, box_regression_per_image, anchors_per_image, matched_idxs_per_image in zip(
             targets, box_regression, anchors, matched_idxs
         ):
+            ## {'label': metatensor([0], device='cuda:0'), 'box': metatensor([[ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0', dtype=torch.float16)}
             # for each image, get training samples
             decode_box_regression_per_image, matched_gt_boxes_per_image = self.get_box_train_sample_per_image(
                 box_regression_per_image, targets_per_image, anchors_per_image, matched_idxs_per_image
             )
-            total_box_regression_list.append(decode_box_regression_per_image)
+            total_box_regression_list.append(decode_box_regression_per_image)  ## tensor([], device='cuda:0', size=(0, 6), dtype=torch.float16,grad_fn=<SliceBackward0>)
             total_target_regression_list.append(matched_gt_boxes_per_image)
+
+            # (Pdb) decode_box_regression_per_image
+            # metatensor([[-0.6587,  1.3252,  1.3281,  0.0082,  1.1582,  0.0020],
+            #         [-0.6675,  0.0450,  1.7139, -0.4758, -0.5742,  0.3108],
+            #         [-0.4761, -0.2275,  1.3018, -0.3845, -0.1411,  0.1126],
+            #         [-0.3447, -0.1152,  1.3369, -1.0615, -0.4124, -0.0239]],
+            #     device='cuda:0', dtype=torch.float16, grad_fn=<AliasBackward0>)
+            # (Pdb) matched_gt_boxes_per_image
+            # metatensor([[ 0.0000,  0.3000,  0.0000,  0.0950,  0.0950,  0.0000],
+            #         [ 0.0000, -0.1000,  0.3333,  0.0950,  0.0950,  0.0000],
+            #         [ 0.0000, -0.1000,  0.0000,  0.0950,  0.0950,  0.0000],
+            #         [ 0.0000, -0.1000, -0.3333,  0.0950,  0.0950,  0.0000]],
+            #     device='cuda:0')
 
         total_box_regression = torch.cat(total_box_regression_list, dim=0)
         total_target_regression = torch.cat(total_target_regression_list, dim=0)
@@ -901,11 +985,12 @@ class RetinaNetDetector(nn.Module):
             else:
                 warnings.warn("NaN or Inf in predicted classification logits.")
 
-        foreground_idxs_per_image = matched_idxs_per_image >= 0
+        foreground_idxs_per_image = matched_idxs_per_image >= 0 ## torch.Size([315360])
 
-        num_foreground = int(foreground_idxs_per_image.sum())
-        num_gt_box = targets_per_image[self.target_box_key].shape[0]
-
+        num_foreground = int(foreground_idxs_per_image.sum()) ## 0/4
+        num_gt_box = targets_per_image[self.target_box_key].shape[0] ## 0/1
+        ## targets_per_image[self.target_box_key] = metatensor([], device='cuda:0', size=(0, 6), dtype=torch.float16)
+        ## targets_per_image[self.target_box_key] = metatensor([[ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0', dtype=torch.float16)
         if self.debug:
             print(f"Number of positive (matched) anchors: {num_foreground}; Number of GT box: {num_gt_box}.")
             if num_gt_box > 0 and num_foreground < 2 * num_gt_box:
@@ -916,12 +1001,12 @@ class RetinaNetDetector(nn.Module):
                 )
 
         # create the target classification with one-hot encoding
-        gt_classes_target = torch.zeros_like(cls_logits_per_image)  # (sum(HW(D)A), self.num_classes)
+        gt_classes_target = torch.zeros_like(cls_logits_per_image)  # (sum(HW(D)A), self.num_classes) torch.Size([315360, 1])
         gt_classes_target[
-            foreground_idxs_per_image,  # fg anchor idx in
+            foreground_idxs_per_image,  # fg anchor idx in torch.Size([315360])
             targets_per_image[self.target_label_key][
                 matched_idxs_per_image[foreground_idxs_per_image]
-            ],  # fg class label
+            ],  # fg class label metatensor([], device='cuda:0', dtype=torch.int64)
         ] = 1.0
 
         if self.fg_bg_sampler is None:
@@ -936,7 +1021,7 @@ class RetinaNetDetector(nn.Module):
             # [0, M - 1] or a negative value indicating that prediction i could not
             # be matched. BELOW_LOW_THRESHOLD = -1, BETWEEN_THRESHOLDS = -2
             if isinstance(self.fg_bg_sampler, HardNegativeSampler):
-                max_cls_logits_per_image = torch.max(cls_logits_per_image.to(torch.float32), dim=1)[0]
+                max_cls_logits_per_image = torch.max(cls_logits_per_image.to(torch.float32), dim=1)[0] ## torch.Size([315360])
                 sampled_pos_inds_list, sampled_neg_inds_list = self.fg_bg_sampler(
                     [matched_idxs_per_image + 1], max_cls_logits_per_image
                 )
@@ -949,9 +1034,11 @@ class RetinaNetDetector(nn.Module):
                     "Please override self.get_cls_train_sample_per_image(*) for your own sampler."
                 )
 
-            sampled_pos_inds = torch.where(torch.cat(sampled_pos_inds_list, dim=0))[0]
-            sampled_neg_inds = torch.where(torch.cat(sampled_neg_inds_list, dim=0))[0]
+            sampled_pos_inds = torch.where(torch.cat(sampled_pos_inds_list, dim=0))[0] ## torch.Size([0])
+            sampled_neg_inds = torch.where(torch.cat(sampled_neg_inds_list, dim=0))[0] ## torch.Size([16])
             valid_idxs_per_image = torch.cat([sampled_pos_inds, sampled_neg_inds], dim=0)
+            ## tensor([ 17746,  49933,  56167,  56413,  62056,  90376, 113170, 151186, 151540,
+            #     162949, 192235, 215026, 256057, 284647, 298552, 298675], device='cuda:0')
 
         return cls_logits_per_image[valid_idxs_per_image, :], gt_classes_target[valid_idxs_per_image, :]
 
@@ -984,22 +1071,41 @@ class RetinaNetDetector(nn.Module):
             else:
                 warnings.warn("NaN or Inf in predicted box regression.")
 
-        foreground_idxs_per_image = torch.where(matched_idxs_per_image >= 0)[0]
-        num_gt_box = targets_per_image[self.target_box_key].shape[0]
+        num_gt_box = targets_per_image[self.target_box_key].shape[0] ## 1
+        foreground_idxs_per_image = torch.where(matched_idxs_per_image >= 0)[0] ## torch.Size([4]) metatensor([293897, 293954, 293957, 293960], device='cuda:0')
 
         # if no GT box, return empty arrays
         if num_gt_box == 0:
-            return box_regression_per_image[0:0, :], box_regression_per_image[0:0, :]
+            return box_regression_per_image[0:0, :], box_regression_per_image[0:0, :]  ##torch.Size([0, 6])
 
         # select only the foreground boxes
         # matched GT boxes for foreground anchors
+        ## {'label': metatensor([0], device='cuda:0'), 'box': metatensor([[ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0', dtype=torch.float16)}
         matched_gt_boxes_per_image = targets_per_image[self.target_box_key][
-            matched_idxs_per_image[foreground_idxs_per_image]
-        ].to(box_regression_per_image.device)
+            matched_idxs_per_image[foreground_idxs_per_image]  ## metatensor([0, 0, 0, 0], device='cuda:0')
+        ].to(box_regression_per_image.device) ## torch.Size([4, 6])
+    #     matched_gt_boxes_per_image = metatensor(
+    #    [[ 85.,  11.,  14., 107.,  33.,  26.],
+    #     [ 85.,  11.,  14., 107.,  33.,  26.],
+    #     [ 85.,  11.,  14., 107.,  33.,  26.],
+    #     [ 85.,  11.,  14., 107.,  33.,  26.]], device='cuda:0',
+    #    dtype=torch.float16)
+        
         # predicted box regression for foreground anchors
         box_regression_per_image = box_regression_per_image[foreground_idxs_per_image, :]
+        ## metatensor([[-0.6587,  1.3252,  1.3281,  0.0082,  1.1582,  0.0020],
+        #     [-0.6675,  0.0450,  1.7139, -0.4758, -0.5742,  0.3108],
+        #     [-0.4761, -0.2275,  1.3018, -0.3845, -0.1411,  0.1126],
+        #     [-0.3447, -0.1152,  1.3369, -1.0615, -0.4124, -0.0239]],
+        #    device='cuda:0', dtype=torch.float16, grad_fn=<AliasBackward0>)
+        
         # foreground anchors
         anchors_per_image = anchors_per_image[foreground_idxs_per_image, :]
+        ## metatensor([[ 86.,   6.,  14., 106.,  26.,  26.],
+        #     [ 86.,  14.,  10., 106.,  34.,  22.],
+        #     [ 86.,  14.,  14., 106.,  34.,  26.],
+        #     [ 86.,  14.,  18., 106.,  34.,  30.]], device='cuda:0',
+        #    dtype=torch.float16)
 
         # encode GT boxes or decode predicted box regression before computing losses
         matched_gt_boxes_per_image_ = matched_gt_boxes_per_image

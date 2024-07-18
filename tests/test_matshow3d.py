@@ -114,7 +114,6 @@ class TestMatshow3d(unittest.TestCase):
             every_n=2,
             frame_dim=-1,
             channel_dim=0,
-            fill_value=0,
             show=False,
         )
 

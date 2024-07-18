@@ -41,7 +41,7 @@ TEST_CASE_2 = [
 
 class TestCompose(Compose):
 
-    def __call__(self, input_, lazy=False):
+    def __call__(self, input_, lazy):
         img = self.transforms[0](input_)
         metadata = img.meta
         img = self.transforms[1](img)

@@ -297,14 +297,14 @@ class RetinaNet(nn.Module):
             )
         self.feature_extractor = feature_extractor
 
-        self.feature_map_channels: int = self.feature_extractor.out_channels
-        self.num_anchors = num_anchors
+        self.feature_map_channels: int = self.feature_extractor.out_channels ##256
+        self.num_anchors = num_anchors ##3
         self.classification_head = RetinaNetClassificationHead(
             self.feature_map_channels, self.num_anchors, self.num_classes, spatial_dims=self.spatial_dims
-        )
+        )  ## B . num_cls * A . H . W . D
         self.regression_head = RetinaNetRegressionHead(
             self.feature_map_channels, self.num_anchors, spatial_dims=self.spatial_dims
-        )
+        ) ## B . 2*spatial_dims*A . H . W . D
 
         self.cls_key: str = "classification"
         self.box_reg_key: str = "box_regression"

@@ -575,8 +575,8 @@ def convert_box_mode(
     if boxes.shape[0] == 0:
         return boxes
 
-    src_boxmode = get_boxmode(src_mode)
-    dst_boxmode = get_boxmode(dst_mode)
+    src_boxmode = get_boxmode(src_mode) ## <monai.data.box_utils.CornerCornerModeTypeA object at 0x7f917b781e50>
+    dst_boxmode = get_boxmode(dst_mode) ## <monai.data.box_utils.CenterSizeMode object at 0x7f917b714b80>
 
     # if mode not changed, deepcopy the original boxes
     if isinstance(src_boxmode, type(dst_boxmode)):
@@ -585,21 +585,60 @@ def convert_box_mode(
     # convert box mode
     # convert numpy to tensor if needed
     boxes_t, *_ = convert_data_type(boxes, torch.Tensor)
+    ##tensor([[ 86.,   6.,  14., 106.,  26.,  26.],
+        #     [ 86.,  14.,  10., 106.,  34.,  22.],
+        #     [ 86.,  14.,  14., 106.,  34.,  26.],
+        #     [ 86.,  14.,  18., 106.,  34.,  30.]], device='cuda:0',
+        # dtype=torch.float16)
 
     # convert boxes to corners
-    corners = src_boxmode.boxes_to_corners(boxes_t)
+    corners = src_boxmode.boxes_to_corners(boxes_t) ## len(corners)=6, corner[i].shape=torch.Size([4, 1])
+    # (tensor([[86.],
+    #     [86.],
+    #     [86.],
+    #     [86.]], device='cuda:0', dtype=torch.float16), tensor([[ 6.],
+    #     [14.],
+    #     [14.],
+    #     [14.]], device='cuda:0', dtype=torch.float16), tensor([[14.],
+    #     [10.],
+    #     [14.],
+    #     [18.]], device='cuda:0', dtype=torch.float16), tensor([[106.],
+    #     [106.],
+    #     [106.],
+    #     [106.]], device='cuda:0', dtype=torch.float16), tensor([[26.],
+    #     [34.],
+    #     [34.],
+    #     [34.]], device='cuda:0', dtype=torch.float16), tensor([[26.],
+    #     [22.],
+    #     [26.],
+    #     [30.]], device='cuda:0', dtype=torch.float16))
 
     # check validity of corners
-    spatial_dims = get_spatial_dims(boxes=boxes_t)
+    spatial_dims = get_spatial_dims(boxes=boxes_t)  ## 3
     for axis in range(0, spatial_dims):
         if (corners[spatial_dims + axis] < corners[axis]).sum() > 0:
             warnings.warn("Given boxes has invalid values. The box size must be non-negative.")
 
     # convert corners to boxes
     boxes_t_dst = dst_boxmode.corners_to_boxes(corners)
+    ## proposal
+    # tensor([[96., 16., 20., 20., 20., 12.],
+    #     [96., 24., 16., 20., 20., 12.],
+    #     [96., 24., 20., 20., 20., 12.],
+    #     [96., 24., 24., 20., 20., 12.]], device='cuda:0', dtype=torch.float16)
+    ## gt
+    # tensor([[96., 22., 20., 22., 22., 12.],
+    #     [96., 22., 20., 22., 22., 12.],
+    #     [96., 22., 20., 22., 22., 12.],
+    #     [96., 22., 20., 22., 22., 12.]], device='cuda:0', dtype=torch.float16)
 
     # convert tensor back to numpy if needed
     boxes_dst, *_ = convert_to_dst_type(src=boxes_t_dst, dst=boxes)
+    # metatensor([[96., 16., 20., 20., 20., 12.],
+    #     [96., 24., 16., 20., 20., 12.],
+    #     [96., 24., 20., 20., 20., 12.],
+    #     [96., 24., 24., 20., 20., 12.]], device='cuda:0', dtype=torch.float16)
+    
     return boxes_dst
 
 
@@ -1011,16 +1050,16 @@ def spatial_crop_boxes(
         - cropped boxes, boxes[keep], does not share memory with original boxes
         - ``keep``, it indicates whether each box in ``boxes`` are kept when ``remove_empty=True``.
     """
-
+    # import pdb; pdb.set_trace()
     # convert numpy to tensor if needed
     boxes_t = convert_data_type(boxes, torch.Tensor)[0].clone()
 
     # convert to float32 since torch.clamp_ does not support float16
     boxes_t = boxes_t.to(dtype=COMPUTE_DTYPE)
 
-    roi_start_t = convert_to_dst_type(src=roi_start, dst=boxes_t, wrap_sequence=True)[0].to(torch.int16)
-    roi_end_t = convert_to_dst_type(src=roi_end, dst=boxes_t, wrap_sequence=True)[0].to(torch.int16)
-    roi_end_t = torch.maximum(roi_end_t, roi_start_t)
+    roi_start_t = convert_to_dst_type(src=roi_start, dst=boxes_t, wrap_sequence=True)[0].to(torch.int16) ## torch.Size([3])
+    roi_end_t = convert_to_dst_type(src=roi_end, dst=boxes_t, wrap_sequence=True)[0].to(torch.int16) ##tensor([427, 427, 236], device='cuda:0', dtype=torch.int16)
+    roi_end_t = torch.maximum(roi_end_t, roi_start_t)  ##roi_start_t = tensor([0, 0, 0], device='cuda:0', dtype=torch.int16)
 
     # makes sure the bounding boxes are within the patch
     spatial_dims = get_spatial_dims(boxes=boxes, spatial_size=roi_end)
@@ -1028,13 +1067,13 @@ def spatial_crop_boxes(
         boxes_t[:, axis] = boxes_t[:, axis].clamp(min=roi_start_t[axis], max=roi_end_t[axis] - TO_REMOVE)
         boxes_t[:, axis + spatial_dims] = boxes_t[:, axis + spatial_dims].clamp(
             min=roi_start_t[axis], max=roi_end_t[axis] - TO_REMOVE
-        )
+        ) ##clip
         boxes_t[:, axis] -= roi_start_t[axis]
         boxes_t[:, axis + spatial_dims] -= roi_start_t[axis]
 
     # remove the boxes that are actually empty
     if remove_empty:
-        keep_t = boxes_t[:, spatial_dims] >= boxes_t[:, 0] + 1 - TO_REMOVE
+        keep_t = boxes_t[:, spatial_dims] >= boxes_t[:, 0] + 1 - TO_REMOVE  ## 第4列 - 第1列 确保后边的坐标比前边的大
         for axis in range(1, spatial_dims):
             keep_t = keep_t & (boxes_t[:, axis + spatial_dims] >= boxes_t[:, axis] + 1 - TO_REMOVE)
         boxes_t = boxes_t[keep_t]
@@ -1063,7 +1102,8 @@ def clip_boxes_to_image(
         - clipped boxes, boxes[keep], does not share memory with original boxes
         - ``keep``, it indicates whether each box in ``boxes`` are kept when ``remove_empty=True``.
     """
-    spatial_dims = get_spatial_dims(boxes=boxes, spatial_size=spatial_size)
+    #spatial_size = [427, 427, 236] boxes.shape = [59,6]
+    spatial_dims = get_spatial_dims(boxes=boxes, spatial_size=spatial_size) ## 3
     return spatial_crop_boxes(boxes, roi_start=[0] * spatial_dims, roi_end=spatial_size, remove_empty=remove_empty)
 
 
@@ -1167,6 +1207,7 @@ def batched_nms(
     Returns:
         Indexes of ``boxes`` that are kept after NMS.
     """
+    import pdb; pdb.set_trace()
     # returns empty array if boxes is empty
     if boxes.shape[0] == 0:
         return convert_to_dst_type(src=np.array([]), dst=boxes, dtype=torch.long)[0]
@@ -1180,10 +1221,10 @@ def batched_nms(
     # we add an offset to all the boxes. The offset is dependent
     # only on the class idx, and is large enough so that boxes
     # from different classes do not overlap
-    max_coordinate = boxes_t.max()
-    offsets = labels_t.to(boxes_t) * (max_coordinate + 1)
-    boxes_for_nms = boxes + offsets[:, None]
-    keep = non_max_suppression(boxes_for_nms, scores_t, nms_thresh, max_proposals, box_overlap_metric)
-
+    max_coordinate = boxes_t.max() ## tensor(371.7500, device='cuda:0')
+    offsets = labels_t.to(boxes_t) * (max_coordinate + 1) ##*操作后还是0，只是变成了浮点0
+    boxes_for_nms = boxes + offsets[:, None] ## offsets[:, None].shape=Torch.Size([69, 1])
+    keep = non_max_suppression(boxes_for_nms, scores_t, nms_thresh, max_proposals, box_overlap_metric) ## max_proposals=100 box_overlap_metric=iou nms_thresh=0.22
+    ## keep = tensor([ 0, 19, 21, 65, 48, 52], device='cuda:0')
     # convert tensor back to numpy if needed
     return convert_to_dst_type(src=keep, dst=boxes, dtype=keep.dtype)[0]

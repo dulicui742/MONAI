@@ -505,6 +505,7 @@ class SlidingWindowInferer(Inferer):
 
         """
 
+        # import pdb; pdb.set_trace()
         device = kwargs.pop("device", self.device)
         buffer_steps = kwargs.pop("buffer_steps", self.buffer_steps)
         buffer_dim = kwargs.pop("buffer_dim", self.buffer_dim)

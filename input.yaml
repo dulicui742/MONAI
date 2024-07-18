@@ -1,0 +1,8 @@
+modality:
+- CT
+#datalist: "/mnt/Data02/project/nnUNet/dataset/nnUNet_preprocessed/Dataset559_data00_cls6/splits_final.json"
+#dataroot: "/mnt/Data02/project/nnUNet/dataset/"
+dataset_name_or_id: 559 # task-specific integer index (optional)
+nnunet_preprocessed: "/mnt/Data02/project/nnUNet/dataset/nnUNet_preprocessed/" # directory for storing pre-processed data (optional)
+nnunet_raw: "/mnt/Data02/project/nnUNet/dataset/nnUNet_raw" # directory for storing formated raw data (optional)
+nnunet_results: "/mnt/Data02/project/nnUNet/dataset/nnUNet_results" # diretory for storing trained model checkpoints (optional)

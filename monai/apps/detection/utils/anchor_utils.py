@@ -215,7 +215,7 @@ class AnchorGenerator(nn.Module):
         """
         Return number of anchor shapes for each feature map.
         """
-        return [c.shape[0] for c in self.cell_anchors]
+        return [c.shape[0] for c in self.cell_anchors] ## [3,3,3] c.shape=torch.Size([3, 6])
 
     def grid_anchors(self, grid_sizes: list[list[int]], strides: list[list[Tensor]]) -> list[Tensor]:
         """
@@ -247,6 +247,9 @@ class AnchorGenerator(nn.Module):
             )
 
         for size, stride, base_anchors in zip(grid_sizes, strides, cell_anchors):
+            ## [48, 48, 40]   [4,4,2]  base_anchors.shape=(3,6)
+            ## [24, 24, 20]   [4,4,2]  base_anchors.shape=(3,6)
+            ## [12, 12, 10]   [4,4,2]  base_anchors.shape=(3,6)
             # for each feature map
             device = base_anchors.device
 
@@ -256,6 +259,19 @@ class AnchorGenerator(nn.Module):
                 torch.arange(0, size[axis], dtype=torch.int32, device=device) * stride[axis]
                 for axis in range(self.spatial_dims)
             ]
+            ##shifts_centers
+            # [tensor([  0,   4,   8,  12,  16,  20,  24,  28,  32,  36,  40,  44,  48,  52,
+            # 56,  60,  64,  68,  72,  76,  80,  84,  88,  92,  96, 100, 104, 108,
+            # 112, 116, 120, 124, 128, 132, 136, 140, 144, 148, 152, 156, 160, 164,
+            # 168, 172, 176, 180, 184, 188], device='cuda:0', dtype=torch.int32), 
+            # tensor([  0,   4,   8,  12,  16,  20,  24,  28,  32,  36,  40,  44,  48,  52,
+            # 56,  60,  64,  68,  72,  76,  80,  84,  88,  92,  96, 100, 104, 108,
+            # 112, 116, 120, 124, 128, 132, 136, 140, 144, 148, 152, 156, 160, 164,
+            # 168, 172, 176, 180, 184, 188], device='cuda:0', dtype=torch.int32), 
+            # tensor([ 0,  2,  4,  6,  8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34,
+            # 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70,
+            # 72, 74, 76, 78], device='cuda:0', dtype=torch.int32)]
+
 
             # to support torchscript, cannot directly use torch.meshgrid(shifts_centers).
             shifts_centers = list(torch.meshgrid(shifts_centers[: self.spatial_dims], indexing="ij"))
@@ -263,20 +279,24 @@ class AnchorGenerator(nn.Module):
             for axis in range(self.spatial_dims):
                 # each element of shifts_centers is sized (HW,) or (HWD,)
                 shifts_centers[axis] = shifts_centers[axis].reshape(-1)
-
+            ##
+            # [tensor([  0,   0,   0,  ..., 188, 188, 188], device='cuda:0', dtype=torch.int32),  ## 48*48*40=92160 / torch.Size([11520])/torch.Size([1440])
+            # tensor([  0,   0,   0,  ..., 188, 188, 188], device='cuda:0',# dtype=torch.int32),  ##48*48*40
+            # tensor([ 0,  2,  4,  ..., 74, 76, 78], device='cuda:0', dtype=torch.int32)] ##48*48*40
+            
             # Expand to [x_center, y_center, x_center, y_center],
             # or [x_center, y_center, z_center, x_center, y_center, z_center]
             if self.indexing == "xy":
                 # Cartesian ('xy') indexing swaps axis 0 and 1.
                 shifts_centers[1], shifts_centers[0] = shifts_centers[0], shifts_centers[1]
-            shifts = torch.stack(shifts_centers * 2, dim=1)  # sized (HW,4) or (HWD,6)
+            shifts = torch.stack(shifts_centers * 2, dim=1)  # sized (HW,4) or (HWD,6)  torch.Size([92160, 6]) / torch.Size([11520, 6])/torch.Size([1440, 6])
 
             # For every (base anchor, output anchor) pair,
             # offset each zero-centered base anchor by the center of the output anchor.
             anchors.append(
                 (shifts.view(-1, 1, self.spatial_dims * 2) + base_anchors.view(1, -1, self.spatial_dims * 2)).reshape(
                     -1, self.spatial_dims * 2
-                )  # each element sized (AHWD,4) or (AHWD,6)
+                )  # each element sized (AHWD,4) or (AHWD,6)  ## torch.Size([276480, 6])=(92160*A)/torch.Size([34560, 6])/torch.Size([4320, 6])
             )
 
         return anchors
@@ -302,23 +322,25 @@ class AnchorGenerator(nn.Module):
                 feature_maps = [torch.zeros((3,6,64,64,32)), torch.zeros((3,6,32,32,16))]
                 anchor_generator(images, feature_maps)
         """
-        grid_sizes = [list(feature_map.shape[-self.spatial_dims :]) for feature_map in feature_maps]
-        image_size = images.shape[-self.spatial_dims :]
-        batchsize = images.shape[0]
+        # import pdb; pdb.set_trace()
+        grid_sizes = [list(feature_map.shape[-self.spatial_dims :]) for feature_map in feature_maps] ## [[48, 48, 40], [24, 24, 20], [12, 12, 10]]
+        ## for testing: grid_sizes:[[108, 108, 120], [54, 54, 60], [27, 27, 30]]
+        image_size = images.shape[-self.spatial_dims :] ##images.shape = torch.Size([4, 1, 192, 192, 80])  ## torch.Size([192, 192, 80]) ## testing torch.Size([432, 432, 240])
+        batchsize = images.shape[0] ## 4 ## testing 1
         dtype, device = feature_maps[0].dtype, feature_maps[0].device
-        strides = [
+        strides = [ ## downsample x //du
             [
                 torch.tensor(image_size[axis] // g[axis], dtype=torch.int64, device=device)
                 for axis in range(self.spatial_dims)
             ]
             for g in grid_sizes
-        ]
+        ] ## [[4,4,2], [8,8,4],[16,16,8]]
 
         self.set_cell_anchors(dtype, device)
         anchors_over_all_feature_maps = self.grid_anchors(grid_sizes, strides)
 
-        anchors_per_image = torch.cat(list(anchors_over_all_feature_maps))
-        return [anchors_per_image] * batchsize
+        anchors_per_image = torch.cat(list(anchors_over_all_feature_maps)) ## torch.Size([315360, 6]) ## for test:torch.Size([4789530, 6])
+        return [anchors_per_image] * batchsize ## [anchors_per_image,]
 
 
 class AnchorGeneratorWithAnchorShape(AnchorGenerator):
@@ -379,11 +401,11 @@ class AnchorGeneratorWithAnchorShape(AnchorGenerator):
     ) -> None:
         nn.Module.__init__(self)
 
-        spatial_dims = len(base_anchor_shapes[0])
-        spatial_dims = look_up_option(spatial_dims, [2, 3])
+        spatial_dims = len(base_anchor_shapes[0]) ## spatial_dims=3
+        spatial_dims = look_up_option(spatial_dims, [2, 3]) ## spatial_dims=3
         self.spatial_dims = spatial_dims
 
-        self.indexing = look_up_option(indexing, ["ij", "xy"])
+        self.indexing = look_up_option(indexing, ["ij", "xy"]) ## "ij"
 
         base_anchor_shapes_t = torch.Tensor(base_anchor_shapes)
         self.cell_anchors = [self.generate_anchors_using_shape(s * base_anchor_shapes_t) for s in feature_map_scales]

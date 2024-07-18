@@ -221,31 +221,48 @@ class ATSSMatcher(Matcher):
             also represented as "xyxy" ([xmin, ymin, xmax, ymax]) for 2D
             and "xyzxyz" ([xmin, ymin, zmin, xmax, ymax, zmax]) for 3D.
         """
-        num_gt = boxes.shape[0]
-        num_anchors = anchors.shape[0]
+        import pdb; pdb.set_trace()
+        num_gt = boxes.shape[0]   ## boxes.shape=torch.Size([1, 6])
+        num_anchors = anchors.shape[0] ## 315360
 
         distances_, _, anchors_center = boxes_center_distance(boxes, anchors)  # num_boxes x anchors
-        distances = convert_to_tensor(distances_)
+        ## anchors_center.shape=torch.Size([315360, 3])  distances_.shape=torch.Size([1, 315360])
+
+        distances = convert_to_tensor(distances_) ## torch.Size([1, 315360])
 
         # select candidates based on center distance
         candidate_idx_list = []
         start_idx = 0
         for _, apl in enumerate(num_anchors_per_level):
-            end_idx = start_idx + apl * num_anchors_per_loc
+            ## apl = 92160/11520/1440
+            end_idx = start_idx + apl * num_anchors_per_loc ## 276480/311040/315360
 
             # topk: total number of candidates per position
-            topk = min(self.num_candidates * num_anchors_per_loc, apl)
+            topk = min(self.num_candidates * num_anchors_per_loc, apl) # 12
             # torch.topk() does not support float16 cpu, need conversion to float32 or float64
-            _, idx = distances[:, start_idx:end_idx].to(COMPUTE_DTYPE).topk(topk, dim=1, largest=False)
+            _, idx = distances[:, start_idx:end_idx].to(COMPUTE_DTYPE).topk(topk, dim=1, largest=False) ## idx.shape=(1,12)
+            ## len(idx)=12 tensor([[138871, 138870, 138991, 138992, 138872, 138990, 138869, 138873, 138875, 138874, 138868, 138867]], device='cuda:0')
             # idx: shape [num_boxes x topk]
             candidate_idx_list.append(idx + start_idx)
 
             start_idx = end_idx
         # [num_boxes x num_candidates] (index of candidate anchors)
         candidate_idx = torch.cat(candidate_idx_list, dim=1)
+        ## candidate_idx.shape=(1,36)
+        # tensor([[138871, 138870, 138991, 138992, 138872, 138990, 138869, 138873, 138875,
+        #         138874, 138868, 138867, 293955, 293956, 293957, 293953, 293960, 293952,
+        #         293954, 293959, 293958, 293895, 293896, 293897, 313237, 313236, 313240,
+        #         313241, 313238, 313239, 313268, 313269, 313271, 313270, 313267, 313266]],
+        #     device='cuda:0')
 
-        match_quality_matrix = self.similarity_fn(boxes, anchors)  # [num_boxes x anchors]
-        candidate_ious = match_quality_matrix.gather(1, candidate_idx)  # [num_boxes, n_candidates]
+        match_quality_matrix = self.similarity_fn(boxes, anchors)  # [num_boxes x anchors] torch.Size([1, 315360]) ## IOU
+        candidate_ious = match_quality_matrix.gather(1, candidate_idx)  # [num_boxes, n_candidates] ## torch.Size([1, 36])  3个level上所有的候选框
+        ## candidate_ious
+        # metatensor([[0.0331, 0.0331, 0.0331, 0.1033, 0.1033, 0.0331, 0.1033, 0.0331, 0.1033,
+        #         0.0331, 0.0331, 0.0331, 0.2644, 0.3306, 0.7539, 0.2106, 0.4016, 0.1860,
+        #         0.4016, 0.2106, 0.1860, 0.2047, 0.2949, 0.5137, 0.2690, 0.3428, 0.2690,
+        #         0.1512, 0.1512, 0.3428, 0.1434, 0.2605, 0.1434, 0.1935, 0.1935, 0.2605]],
+        #     device='cuda:0', dtype=torch.float16)
 
         # corner case, n_candidates<=1 will make iou_std_per_gt NaN
         if candidate_idx.shape[1] <= 1:
@@ -254,10 +271,16 @@ class ATSSMatcher(Matcher):
             return match_quality_matrix, matches
 
         # compute adaptive iou threshold
-        iou_mean_per_gt = candidate_ious.mean(dim=1)  # [num_boxes]
-        iou_std_per_gt = candidate_ious.std(dim=1)  # [num_boxes]
-        iou_thresh_per_gt = iou_mean_per_gt + iou_std_per_gt  # [num_boxes]
-        is_pos = candidate_ious >= iou_thresh_per_gt[:, None]  # [num_boxes x n_candidates]
+        iou_mean_per_gt = candidate_ious.mean(dim=1)  # [num_boxes] metatensor([0.2043], device='cuda:0', dtype=torch.float16)
+        iou_std_per_gt = candidate_ious.std(dim=1)  # [num_boxes] metatensor([0.1555], device='cuda:0', dtype=torch.float16)
+        iou_thresh_per_gt = iou_mean_per_gt + iou_std_per_gt  # [num_boxes] metatensor([0.3599], device='cuda:0', dtype=torch.float16)
+        is_pos = candidate_ious >= iou_thresh_per_gt[:, None]  # [num_boxes x n_candidates] iou_thresh_per_gt[:, None].shape=[1,1]
+        ##  is_pos torch.Size([1, 36])
+        # metatensor([[False, False, False, False, False, False, False, False, False, False,
+        #         False, False, False, False,  True, False,  True, False,  True, False,
+        #         False, False, False,  True, False, False, False, False, False, False,
+        #         False, False, False, False, False, False]], device='cuda:0')
+
         if self.debug:
             print(f"Anchor matcher threshold: {iou_thresh_per_gt}")
 
@@ -274,18 +297,18 @@ class ATSSMatcher(Matcher):
             is_in_gt = convert_to_tensor(is_in_gt_)
             is_pos = is_pos & is_in_gt.view_as(is_pos)  # [num_boxes x n_candidates]
 
-        # in case on anchor is assigned to multiple boxes, use box with highest IoU
+        # in case one anchor is assigned to multiple boxes, use box with highest IoU
         # TODO: think about a better way to do this
         for ng in range(num_gt):
             candidate_idx[ng, :] += ng * num_anchors
-        ious_inf = torch.full_like(match_quality_matrix, -INF).view(-1)
-        index = candidate_idx.view(-1)[is_pos.view(-1)]
-        ious_inf[index] = match_quality_matrix.view(-1)[index]
-        ious_inf = ious_inf.view_as(match_quality_matrix)
+        ious_inf = torch.full_like(match_quality_matrix, -INF).view(-1) ## torch.Size([315360]) metatensor([inf,inf,...])
+        index = candidate_idx.view(-1)[is_pos.view(-1)]  ##metatensor([293957, 293960, 293954, 293897], device='cuda:0')
+        ious_inf[index] = match_quality_matrix.view(-1)[index]  ## metatensor([0.7539, 0.4016, 0.4016, 0.5137], device='cuda:0', dtype=torch.float16) torch.Size([315360])
+        ious_inf = ious_inf.view_as(match_quality_matrix) ##torch.Size([1, 315360])
 
-        matched_vals, matches = ious_inf.to(COMPUTE_DTYPE).max(dim=0)
+        matched_vals, matches = ious_inf.to(COMPUTE_DTYPE).max(dim=0) ## torch.Size([315360]), torch.Size([315360])
         matches[matched_vals == -INF] = self.BELOW_LOW_THRESHOLD
-        return match_quality_matrix, matches
+        return match_quality_matrix, matches  ## torch.Size([1, 315360]), torch.Size([315360]) 
 
 
 MatcherType = TypeVar("MatcherType", bound=Matcher)
